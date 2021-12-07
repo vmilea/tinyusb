@@ -28,7 +28,7 @@
 
 #if TUSB_OPT_DEVICE_ENABLED && CFG_TUSB_MCU == OPT_MCU_RP2040
 
-#include "pico.h"
+#include "dcd_rp2040.h"
 #include "rp2040_usb.h"
 
 #if TUD_OPT_RP2040_USB_DEVICE_ENUMERATION_FIX
@@ -227,10 +227,18 @@ static void reset_non_control_endpoints(void)
   next_buffer_ptr = &usb_dpram->epx_data[0];
 }
 
-static void dcd_rp2040_irq(void)
+static void __no_inline_not_in_flash_func(dcd_rp2040_irq)(void)
 {
     uint32_t const status = usb_hw->ints;
     uint32_t handled = 0;
+
+    if (status & USB_INTS_DEV_SOF_BITS)
+    {
+        handled |= USB_INTS_DEV_SOF_BITS;
+
+        uint32_t frame = usb_hw->sof_rd & USB_SOF_RD_BITS;
+        if (dcd_sof_cb) dcd_sof_cb(frame);
+    }
 
     if (status & USB_INTS_SETUP_REQ_BITS)
     {
@@ -358,10 +366,13 @@ void dcd_init (uint8_t rhport)
   // for the global interrupt enable...
   // Note: Force VBUS detect cause disconnection not detectable
   usb_hw->sie_ctrl = USB_SIE_CTRL_EP0_INT_1BUF_BITS;
-  usb_hw->inte     = USB_INTS_BUFF_STATUS_BITS | USB_INTS_BUS_RESET_BITS | USB_INTS_SETUP_REQ_BITS |
-                     USB_INTS_DEV_SUSPEND_BITS | USB_INTS_DEV_RESUME_FROM_HOST_BITS |
-                     (FORCE_VBUS_DETECT ? 0 : USB_INTS_DEV_CONN_DIS_BITS);
 
+  uint inte = USB_INTS_BUFF_STATUS_BITS | USB_INTS_BUS_RESET_BITS | USB_INTS_SETUP_REQ_BITS |
+              USB_INTS_DEV_SUSPEND_BITS | USB_INTS_DEV_RESUME_FROM_HOST_BITS;
+  if (!FORCE_VBUS_DETECT) inte |= USB_INTS_DEV_CONN_DIS_BITS;
+  // skip SOF interrupt unless required by user code
+  if (dcd_sof_cb) inte |= USB_INTS_DEV_SOF_BITS;
+  usb_hw->inte = inte;
   dcd_connect(rhport);
 }
 
